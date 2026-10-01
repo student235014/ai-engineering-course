@@ -1,0 +1,14 @@
+# Qdrant для занятия 6. Запуск:  docker compose up -d
+# Веб-интерфейс: http://localhost:6333/dashboard
+# Остановить:    docker compose down   (данные останутся в volume qdrant_storage)
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:
