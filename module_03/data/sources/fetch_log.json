@@ -1,0 +1,26 @@
+{
+  "ext_fnp461.pdf": {
+    "url": "http://mos.gosnadzor.ru/about/documents/Приказ РТН № 461 от 26.11.2020.pdf",
+    "retrieved_at": "2026-07-27",
+    "sha256": "09738291f5c6b84d0f589235c41087cf0028e6e87578ca55b1700d0a94550ccc",
+    "bytes": 921201
+  },
+  "ext_gost32601.pdf": {
+    "url": "https://files.stroyinf.ru/Data/784/78426.pdf",
+    "retrieved_at": "2026-10-01",
+    "sha256": "df24bf3cca56f71f8044c5350237e1e357abac673643359e411fa54bef09872f",
+    "bytes": 78362089
+  },
+  "ext_reglament_truboprovody.pdf": {
+    "url": "https://gostbank.metaltorg.ru/data/norms_/jr/12.pdf",
+    "retrieved_at": "2026-07-27",
+    "sha256": "ba77d87adc05f0f4ef601180ea8a06065037cd4584b6ae8c7beebce1c5d9085e",
+    "bytes": 92458
+  },
+  "ext_reglament_to.pdf": {
+    "url": "https://www.perco.ru/download/documentation/rus/Reglament-TO.pdf",
+    "retrieved_at": "2026-07-27",
+    "sha256": "5663952199dfce4fd2cbb3b37f7d2da75e4d7c83427641db498cd16e791b6ed9",
+    "bytes": 271619
+  }
+}
