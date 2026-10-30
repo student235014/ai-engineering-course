@@ -37,7 +37,7 @@ from sentence_transformers import SentenceTransformer
 import ingestion
 from qdrant_connect import make_client
 from vector_store import MODEL_NAME, load_manifest, search
-from rag_assistant import answer, format_context, REFUSAL_TEXT
+from rag_assistant import answer, format_context, REFUSAL_TEXT, ask_model
 
 BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "qdrant_chunks"
@@ -93,28 +93,33 @@ JUDGE_SYSTEM = (
 #  ОЦЕНКА ПО РАЗМЕТКЕ
 # ====================================================================
 
-def classify(question: dict, hits, result: dict) -> str:
-    """TODO 1: оценка ответа по разметке eval-набора.
+def classify(q: dict, hits: list, result: dict) -> str:
+    answer_text = result.get("answer", "") or ""
+    sources     = result.get("sources", []) or []
+    refused     = (answer_text.strip() == REFUSAL_TEXT)
 
-    Верни одну из меток:
-      - ok
-      - hallucination
-      - over_refusal
-      - retrieval_error
-      - generation_error
+    # 1. Вопрос ВНЕ корпуса
+    if not q["in_corpus"]:
+        return "ok" if refused else "hallucination"
 
-    Логика:
-      1) Если question["in_corpus"] == False:
-         - ответ == REFUSAL_TEXT -> ok
-         - иначе -> hallucination
-      2) Если вопрос из корпуса, но ассистент отказал (REFUSAL_TEXT) -> over_refusal
-      3) Проверить источники: хотя бы один doc_id из question["expected"]
-         должен быть в result["sources"], иначе -> retrieval_error
-      4) Проверить фактоид: question["must_contain"] должен встречаться в answer
-         (без учёта регистра), иначе -> generation_error
-      5) Иначе -> ok
-    """
-    # TODO 1: замени заглушку на реализацию по шагам выше
+    # 2. Вопрос ИЗ корпуса
+    if refused:
+        return "over_refusal"
+
+    # 3. Ожидаемый источник не найден среди источников ответа
+    expected = q.get("expected") or []
+    if not any(doc in sources for doc in expected):
+        return "retrieval_error"
+
+    # 4. Источник есть, но факта в ответе нет
+    must = q.get("must_contain", "") or ""
+    if isinstance(must, list):
+        if not all(m.lower() in answer_text.lower() for m in must):
+            return "generation_error"
+    else:
+        if must and must.lower() not in answer_text.lower():
+            return "generation_error"
+
     return "ok"
 
 
@@ -123,27 +128,39 @@ def classify(question: dict, hits, result: dict) -> str:
 # ====================================================================
 
 def llm_judge(question: str, context: str, answer_text: str) -> dict:
-    """TODO 2: попросить GigaChat оценить ответ ассистента как судья.
+    try:
+        user_msg = (
+            f"ВОПРОС:\n{question}\n\n"
+            f"КОНТЕКСТ:\n{context}\n\n"
+            f"ОТВЕТ:\n{answer_text}"
+        )
 
-    Что сделать:
-      1) Собрать user_msg из question/context/answer_text.
-      2) Вызвать GigaChat с system=JUDGE_SYSTEM и user=user_msg.
-      3) Распарсить JSON из ответа модели и вернуть dict.
-      4) В except вернуть fallback:
-         {"overall_verdict": "error", "reason": str(e)}
+        messages = [
+            {"role": "system", "content": JUDGE_SYSTEM},
+            {"role": "user",   "content": user_msg},
+        ]
+        raw = ask_model(messages)
 
-    Ожидаемые поля в словаре судьи:
-      answer_relevance, context_relevance, answer_faithfulness,
-      overall_verdict, reason
-    """
-    # TODO 2: замени заглушку на реальный вызов судьи
-    return {
-        "answer_relevance": "low",
-        "context_relevance": "low",
-        "answer_faithfulness": "low",
-        "overall_verdict": "error",
-        "reason": "TODO 2: llm_judge не реализован",
-    }
+        # чистка ```json ... ```
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        text = text.strip()
+
+        data = json.loads(text)
+
+        return {
+            "answer_relevance":    data.get("answer_relevance", "low"),
+            "context_relevance":   data.get("context_relevance", "low"),
+            "answer_faithfulness": data.get("answer_faithfulness", "low"),
+            "overall_verdict":     data.get("overall_verdict", "error"),
+            "reason":              data.get("reason", ""),
+        }
+
+    except Exception as e:
+        return {"overall_verdict": "error", "reason": str(e)}
 
 
 # ====================================================================
@@ -295,46 +312,31 @@ def _print_judge_report(rows: list) -> None:
 # ====================================================================
 
 def sweep_chunking(client, model, alias: str):
-    """Автоматически перебирает параметры нарезки и сравнивает качество двумя способами.
-
-    Эту функцию запускают командой:  python evaluate_rag.py --sweep
-    Вручную запускать ingestion.py несколько раз не нужно — функция сама
-    пересобирает индекс Qdrant на каждой комбинации параметров.
-
-    TODO 3: сейчас функция только печатает шапку таблицы — заглушка.
-    Напиши цикл по CHUNK_COMBOS. На каждой итерации:
-      1. ingestion.CHUNK_SIZE = size; ingestion.OVERLAP = overlap
-      2. ingestion.build_index(client, model)  — пересобирает индекс, возвращает manifest
-      3. counts = run_eval(client, model, alias, verbose=False)
-         Посчитай для вопросов из базы (in_corpus=True):
-           - верных по разметке:  counts["markup"].get("ok", 0)
-           - верных по судье:     counts["judge"].get("ok", 0)
-      4. Выведи строку таблицы (см. формат ниже).
-
-    После цикла верни параметры к 600/150 и пересобери индекс ещё раз —
-    иначе следующий обычный запуск будет работать на последних параметрах.
-
-    Ожидаемый вид таблицы (8 вопросов из базы из 11 всего):
-
-        Размер чанка / перекрытие  | чанков |  ✓ по разметке | ✓ по судье
-        ──────────────────────────────────────────────────────────────────────
-        1000 / 200                 |    563 |          6 / 8 |      5 / 8
-         600 / 0                   |    715 |          7 / 8 |      7 / 8
-         600 / 150                 |    921 |          7 / 8 |      7 / 8
-         400 / 0                   |   1028 |          5 / 8 |      5 / 8
-         400 / 100                 |   1337 |          7 / 8 |      6 / 8
-         300 / 150                 |   2600 |          4 / 8 |      3 / 8
-
-    Разметка и судья могут расходиться: разметка проверяет, есть ли нужная
-    строка в ответе; судья оценивает, насколько ответ полезен и честен.
-    """
+    """..."""
     in_corpus_total = sum(1 for q in QUESTIONS if q["in_corpus"])
     col = f"{'Размер чанка / перекрытие':<26}"
     print(f"\n  {col} | {'чанков':>7} | {'✓ по разметке':>14} | {'✓ по судье':>10}")
     print("  " + _SEP[:72])
     original = (ingestion.CHUNK_SIZE, ingestion.OVERLAP)
-    # TODO 3: перебор здесь
+
+    for size, overlap in CHUNK_COMBOS:
+        ingestion.CHUNK_SIZE = size
+        ingestion.OVERLAP = overlap
+
+        manifest, _chunks = ingestion.build_index(client, model)
+        n_chunks = manifest["chunks"]
+
+        counts = run_eval(client, model, alias, verbose=False)
+
+        markup_ok = counts["markup"].get("ok", 0)
+        judge_ok  = counts["judge"].get("ok", 0)
+
+        print(f"  {f'{size} / {overlap}':<26} | {n_chunks:>7} | "
+              f"{markup_ok:>6} / {in_corpus_total:<2} | "
+              f"{judge_ok:>4} / {in_corpus_total:<2}")
+
     ingestion.CHUNK_SIZE, ingestion.OVERLAP = original
+    ingestion.build_index(client, model)
 
 
 # ====================================================================
@@ -342,25 +344,22 @@ def sweep_chunking(client, model, alias: str):
 # ====================================================================
 
 def resolve_conflicts(hits):
-    """Если в выдаче несколько версий одного регламента — оставляет свежую.
+    """Если в выдаче несколько версий одного регламента — оставляет свежую."""
+    # 1. Группируем hits по базовому doc_id (без суффикса -OLD)
+    groups = {}
+    for h in hits:
+        base_id = h.payload["doc_id"].removesuffix("-OLD")
+        groups.setdefault(base_id, []).append(h)
 
-    TODO 4: сейчас возвращает hits без изменений — заглушка. С ней
-    demo_conflict() покажет саму проблему, но не решение.
+    # 2. В каждой группе оставляем запись с максимальным date
+    result = []
+    for base_id, items in groups.items():
+        # date в формате ГГГГ-ММ-ДД — строки сравниваются как даты
+        best = max(items, key=lambda h: h.payload.get("date") or "")
+        result.append(best)
 
-    В data/corpus_conflict/REGL-GEN-01-OLD.json лежит устаревшая (version
-    2.0, дата 2022-05-14) редакция регламента, который в основном корпусе
-    существует как REGL-GEN-01 (version 3.1, дата 2024-01-10) — тот же
-    регламент, тот же номер РГЛ-НО-014, другие сроки. Оба документа
-    отвечают на один вопрос по смыслу — Qdrant не знает, что один из них
-    отменён, и вернёт оба, если оба лежат в индексе.
-
-    Что сделать: сгруппировать hits по базовому doc_id (REGL-GEN-01-OLD
-    и REGL-GEN-01 — одна группа: суффикс -OLD не признак другой группы);
-    в каждой группе оставить запись с максимальным payload["date"]
-    (строки ГГГГ-ММ-ДД сравниваются как даты), остальные выбросить.
-    Порядок и score оставшихся точек не менять.
-    """
-    return hits
+    # 3. Возвращаем. Порядок и score не меняем.
+    return result
 
 
 def demo_conflict(client, model, alias: str):
