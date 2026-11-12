@@ -1,0 +1,5 @@
+# Ключ GigaChat — тот же, что в модуле 4 (нужен хосту для выбора tool).
+GIGACHAT_CREDENTIALS=
+# При необходимости можно выбрать другую доступную модели для вашего аккаунта.
+# GIGACHAT_MODEL=GigaChat-2
+# GIGACHAT_SCOPE=GIGACHAT_API_PERS
