@@ -17,7 +17,7 @@
     python mcp_client_demo.py
 
 Нужен ключ GigaChat в .env (как в модуле 4):
-    GIGACHAT_CREDENTIALS=...
+    GIGACHAT_CREDENTIALS=... ывшрмшвмоыломмсоримор
 """
 
 from __future__ import annotations
