@@ -1,0 +1,4 @@
+langchain-core==1.5.3
+langchain-gigachat==0.5.1
+gigachat==0.2.1
+python-dotenv==1.2.2
